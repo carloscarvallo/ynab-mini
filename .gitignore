@@ -2,6 +2,9 @@
 .env
 .env.local
 
+# Migration export
+transactions_export.json
+
 # Python
 __pycache__/
 *.py[cod]

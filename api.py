@@ -7,11 +7,13 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 
 from budget import budget_bp
+from migrate import migrate_bp
 
 load_dotenv()
 
 app = Flask(__name__)
 app.register_blueprint(budget_bp)
+app.register_blueprint(migrate_bp)
 
 API_TOKEN = os.getenv("YNAB_API_TOKEN")
 BUDGET_ID = os.getenv("YNAB_BUDGET_ID", "last-used")
