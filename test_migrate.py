@@ -118,6 +118,13 @@ class BaseMigrateTestCase(unittest.TestCase):
         with open(migrate.ACCOUNT_MAP_FILE, "w") as f:
             json.dump({"accounts": entries}, f)
 
+    def _mock_budget(self, name="Test Budget"):
+        return MagicMock(
+            status_code=200,
+            json=lambda: {"data": {"budget": {"id": "dest-budget-uuid", "name": name}}},
+            raise_for_status=lambda: None,
+        )
+
     def _mock_get(self, transactions):
         return MagicMock(
             status_code=200,
@@ -197,6 +204,144 @@ class TestDownload(BaseMigrateTestCase):
         mock_get.return_value = mock_response
 
         response = self.client.get("/migrate/download")
+
+        self.assertEqual(response.status_code, 401)
+
+
+class TestValidate(BaseMigrateTestCase):
+    @patch("migrate.requests.get")
+    def test_validate_all_mapped_returns_200_ready(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:2])
+        mock_get.return_value = self._mock_budget()
+
+        response = self.client.get("/migrate/validate")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["ready"])
+        self.assertEqual(len(data["accounts_mapped"]), 2)
+        self.assertEqual(len(data["accounts_missing"]), 0)
+
+    @patch("migrate.requests.get")
+    def test_validate_missing_account_returns_422_not_ready(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS)
+        mock_get.return_value = self._mock_budget()
+
+        response = self.client.get("/migrate/validate")
+
+        self.assertEqual(response.status_code, 422)
+        data = response.get_json()
+        self.assertFalse(data["ready"])
+        self.assertEqual(len(data["accounts_missing"]), 1)
+        self.assertEqual(data["accounts_missing"][0]["source"], "src-acct-unmapped")
+
+    @patch("migrate.requests.get")
+    def test_validate_includes_transaction_counts(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:2])
+        mock_get.return_value = self._mock_budget()
+
+        data = self.client.get("/migrate/validate").get_json()
+
+        total = sum(a["transaction_count"] for a in data["accounts_mapped"])
+        self.assertEqual(total, 2)
+
+    @patch("migrate.requests.get")
+    def test_validate_includes_export_metadata(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:1])
+        mock_get.return_value = self._mock_budget()
+
+        data = self.client.get("/migrate/validate").get_json()
+
+        self.assertIn("source_budget_id", data["export"])
+        self.assertIn("since_date", data["export"])
+        self.assertIn("downloaded_at", data["export"])
+        self.assertEqual(data["export"]["total_transactions"], 1)
+
+    def test_validate_missing_export_file_returns_400(self):
+        response = self.client.get("/migrate/validate")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not found", response.get_json()["error"])
+
+    @patch("migrate.requests.get")
+    def test_validate_missing_account_map_returns_400(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:1])
+        mock_get.return_value = self._mock_budget()
+        os.remove(migrate.ACCOUNT_MAP_FILE)
+
+        response = self.client.get("/migrate/validate")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("account_map.json", response.get_json()["error"])
+
+    @patch("migrate.requests.get")
+    def test_validate_mapped_accounts_include_name(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:1])
+        mock_get.return_value = self._mock_budget()
+
+        data = self.client.get("/migrate/validate").get_json()
+
+        self.assertEqual(data["accounts_mapped"][0]["name"], "Checking")
+
+    def test_validate_duplicate_source_ids_returns_400(self):
+        self._write_export(FAKE_TRANSACTIONS[:1])
+        self._write_account_map([
+            {"name": "Checking", "source": "src-acct-1111", "destination": "dst-acct-aaaa"},
+            {"name": "Checking duplicate", "source": "src-acct-1111", "destination": "dst-acct-bbbb"},
+        ])
+
+        response = self.client.get("/migrate/validate")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Duplicate", response.get_json()["error"])
+
+    def test_validate_missing_dest_budget_returns_400(self):
+        self._write_export(FAKE_TRANSACTIONS[:1])
+        orig = os.environ.pop("YNAB_DEST_BUDGET_ID", None)
+
+        response = self.client.get("/migrate/validate")
+
+        if orig is not None:
+            os.environ["YNAB_DEST_BUDGET_ID"] = orig
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("dest_budget", response.get_json()["error"])
+
+    @patch("migrate.requests.get")
+    def test_validate_budget_not_found_returns_422(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:2])
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "Not Found"
+        mock_response.raise_for_status.side_effect = requests.HTTPError(response=mock_response)
+        mock_get.return_value = mock_response
+
+        response = self.client.get("/migrate/validate")
+
+        self.assertEqual(response.status_code, 422)
+        data = response.get_json()
+        self.assertFalse(data["ready"])
+        self.assertFalse(data["destination_budget"]["exists"])
+
+    @patch("migrate.requests.get")
+    def test_validate_includes_budget_name(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:2])
+        mock_get.return_value = self._mock_budget("My Second Budget")
+
+        data = self.client.get("/migrate/validate").get_json()
+
+        self.assertEqual(data["destination_budget"]["name"], "My Second Budget")
+        self.assertTrue(data["destination_budget"]["exists"])
+
+    @patch("migrate.requests.get")
+    def test_validate_ynab_api_error_forwarded(self, mock_get):
+        self._write_export(FAKE_TRANSACTIONS[:1])
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_response.raise_for_status.side_effect = requests.HTTPError(response=mock_response)
+        mock_get.return_value = mock_response
+
+        response = self.client.get("/migrate/validate")
 
         self.assertEqual(response.status_code, 401)
 
