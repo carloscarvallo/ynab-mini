@@ -10,22 +10,22 @@ load_dotenv()
 
 BASE_URL = "https://api.ynab.com/v1"
 EXPORT_FILE = "transactions_export.json"
+ACCOUNT_MAP_FILE = "account_map.json"
 
 
 def _get_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {os.getenv('YNAB_API_TOKEN')}"}
 
 
-def _parse_account_id_map() -> dict[str, str]:
-    raw = os.getenv("YNAB_ACCOUNT_ID_MAP", "")
-    result: dict[str, str] = {}
-    if raw:
-        for pair in raw.split(","):
-            pair = pair.strip()
-            if ":" in pair:
-                src, dst = pair.split(":", 1)
-                result[src.strip()] = dst.strip()
-    return result
+def _load_account_id_map() -> dict[str, str] | None:
+    try:
+        with open(ACCOUNT_MAP_FILE) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Malformed {ACCOUNT_MAP_FILE}: {e}") from e
+    return {entry["source"]: entry["destination"] for entry in data.get("accounts", [])}
 
 _FIELDS_TO_STRIP = {
     "id",
@@ -101,7 +101,13 @@ def push_transactions():
     mapped: list[dict] = []
     skipped: list[dict] = []
 
-    account_id_map = _parse_account_id_map()
+    try:
+        account_id_map = _load_account_id_map()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if account_id_map is None:
+        return jsonify({"error": f"Account map file '{ACCOUNT_MAP_FILE}' not found. Copy account_map.example.json to account_map.json and fill in your account IDs."}), 400
 
     for txn in raw_transactions:
         src_account_id = txn.get("account_id", "")
@@ -118,7 +124,7 @@ def push_transactions():
             "created": 0,
             "transactions": [],
             "skipped": skipped,
-            "warning": "No transactions were mapped. Check YNAB_ACCOUNT_ID_MAP.",
+            "warning": f"No transactions were mapped. Check {ACCOUNT_MAP_FILE}.",
         }), 200
 
     try:

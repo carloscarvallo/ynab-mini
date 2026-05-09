@@ -2,8 +2,9 @@
 .env
 .env.local
 
-# Migration export
+# Migration files (contain real account IDs / transaction data)
 transactions_export.json
+account_map.json
 
 # Python
 __pycache__/

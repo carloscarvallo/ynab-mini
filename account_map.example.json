@@ -1,0 +1,14 @@
+{
+  "accounts": [
+    {
+      "name": "Revolut Checking",
+      "source": "aaaa0000-0000-0000-0000-000000000000",
+      "destination": "bbbb0000-0000-0000-0000-000000000000"
+    },
+    {
+      "name": "Revolut CC",
+      "source": "cccc0000-0000-0000-0000-000000000000",
+      "destination": "dddd0000-0000-0000-0000-000000000000"
+    }
+  ]
+}

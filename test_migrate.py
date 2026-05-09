@@ -10,7 +10,6 @@ os.environ.setdefault("YNAB_ACCOUNT_ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 os.environ.setdefault("YNAB_REVOLUT_CC_ACCOUNT_ID", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 os.environ["YNAB_SOURCE_BUDGET_ID"] = "source-budget-uuid"
 os.environ["YNAB_DEST_BUDGET_ID"] = "dest-budget-uuid"
-os.environ["YNAB_ACCOUNT_ID_MAP"] = "src-acct-1111:dst-acct-aaaa,src-acct-2222:dst-acct-bbbb"
 
 from api import app
 import migrate
@@ -100,11 +99,24 @@ class BaseMigrateTestCase(unittest.TestCase):
         app.config["TESTING"] = True
         self.client = app.test_client()
         self._orig_export = migrate.EXPORT_FILE
+        self._orig_account_map = migrate.ACCOUNT_MAP_FILE
         self._tmpdir = tempfile.mkdtemp()
         migrate.EXPORT_FILE = os.path.join(self._tmpdir, "transactions_export.json")
+        migrate.ACCOUNT_MAP_FILE = os.path.join(self._tmpdir, "account_map.json")
+        self._write_account_map()
 
     def tearDown(self):
         migrate.EXPORT_FILE = self._orig_export
+        migrate.ACCOUNT_MAP_FILE = self._orig_account_map
+
+    def _write_account_map(self, entries=None):
+        if entries is None:
+            entries = [
+                {"name": "Checking", "source": "src-acct-1111", "destination": "dst-acct-aaaa"},
+                {"name": "CC", "source": "src-acct-2222", "destination": "dst-acct-bbbb"},
+            ]
+        with open(migrate.ACCOUNT_MAP_FILE, "w") as f:
+            json.dump({"accounts": entries}, f)
 
     def _mock_get(self, transactions):
         return MagicMock(
