@@ -43,12 +43,52 @@ curl "http://localhost:5001/transactions/cc?since=2026-03-01"
 
 ### `POST /transactions[/<account>]`
 
-Create one or more transactions.
+Create one or more transactions. The body is a JSON **array**; each item describes one
+transaction.
+
+| Param | Type | Description |
+|---|---|---|
+| `account` | URL segment | Default account for every item: `checking` (default), `cc`, or a raw account UUID |
+
+Per-item fields:
+
+| Field | Required | Type | Default | Description |
+|---|---|---|---|---|
+| `amount` | **yes** | number | — | Currency units, not milliunits. Negative is an outflow. Converted with `round(amount * 1000)`. |
+| `account` | no | string | URL segment | `checking`, `cc`, or a raw account UUID. Overrides the URL default for this item only. |
+| `date` | no | string | today | Transaction date, strictly `YYYY-MM-DD`. |
+| `payee_name` | no | string | omitted | Payee. When absent the field is not sent to YNAB at all. |
+| `memo` | no | string | `"from script"` | Free-text note. |
+
+Minimal call — amounts only, dated today:
 
 ```bash
 curl -X POST http://localhost:5001/transactions \
   -H "Content-Type: application/json" \
   -d '[{"amount": -15.50}, {"amount": -8.00, "account": "cc"}]'
+```
+
+Full call — backdated, with payees, into one specific account UUID:
+
+```bash
+curl -X POST http://localhost:5001/transactions/8f3c1e20-1234-4a5b-9c0d-ab12cd34ef56 \
+  -H "Content-Type: application/json" \
+  -d '[
+        {"amount": -50.49, "date": "2026-08-27", "payee_name": "Deliveroo"},
+        {"amount": -62.00, "date": "2026-08-26", "payee_name": "SANA Hotels", "memo": "Lisbon trip"},
+        {"amount": -39.84, "date": "2026-08-26", "payee_name": "El Corte Inglés", "account": "cc"}
+      ]'
+```
+
+Validation runs over the whole array before anything is sent. The first bad item aborts the
+request with `400` and an error naming its index — nothing is created. YNAB HTTP errors are
+forwarded with their original status code.
+
+```json
+{
+  "created": 3,
+  "transactions": [...]
+}
 ```
 
 ### `GET /budget[/<budget_id>]`

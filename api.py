@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import date
+from datetime import date, datetime
 
 import requests
 from dotenv import load_dotenv
@@ -39,14 +39,59 @@ def _resolve_account(key: str) -> str | None:
     return None
 
 
-def _build_transaction(amount: float, account_id: str = ACCOUNT_ID) -> dict:
-    return {
+DEFAULT_MEMO = "from script"
+
+
+def _build_transaction(
+    amount: float,
+    account_id: str = ACCOUNT_ID,
+    txn_date: str | None = None,
+    payee_name: str | None = None,
+    memo: str = DEFAULT_MEMO,
+) -> dict:
+    transaction = {
         "account_id": account_id,
-        "date": date.today().isoformat(),
-        "amount": int(amount * 1000),
-        "memo": "from script",
+        "date": txn_date or date.today().isoformat(),
+        "amount": int(round(amount * 1000)),
+        "memo": memo,
         "approved": True,
     }
+    if payee_name is not None:
+        transaction["payee_name"] = payee_name
+    return transaction
+
+
+def _validate_item(item: dict, index: int, default_account_key: str) -> tuple[dict | None, str | None]:
+    if not isinstance(item, dict):
+        return None, f"Item at index {index} must be a JSON object"
+    if "amount" not in item:
+        return None, f"Item at index {index} is missing 'amount'"
+    if not isinstance(item["amount"], (int, float)):
+        return None, f"Item at index {index}: 'amount' must be a number"
+
+    account_key = item.get("account", default_account_key)
+    if not isinstance(account_key, str):
+        return None, f"Item at index {index}: 'account' must be a string"
+    account_id = _resolve_account(account_key.lower())
+    if not account_id:
+        return None, f"Item at index {index}: unknown account '{account_key.lower()}'. Use a friendly name {list(ACCOUNT_MAP.keys())} or a valid UUID."
+
+    txn_date = item.get("date")
+    if txn_date is not None:
+        try:
+            datetime.strptime(txn_date, "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return None, f"Item at index {index}: 'date' must be a string in YYYY-MM-DD format"
+
+    memo = item.get("memo", DEFAULT_MEMO)
+    if not isinstance(memo, str):
+        return None, f"Item at index {index}: 'memo' must be a string"
+
+    payee_name = item.get("payee_name")
+    if payee_name is not None and not isinstance(payee_name, str):
+        return None, f"Item at index {index}: 'payee_name' must be a string"
+
+    return _build_transaction(item["amount"], account_id, txn_date, payee_name, memo), None
 
 
 @app.get("/transactions")
@@ -83,15 +128,10 @@ def post_transactions(default_account_key: str = "checking"):
 
     transactions = []
     for i, item in enumerate(body):
-        if "amount" not in item:
-            return jsonify({"error": f"Item at index {i} is missing 'amount'"}), 400
-        if not isinstance(item["amount"], (int, float)):
-            return jsonify({"error": f"Item at index {i}: 'amount' must be a number"}), 400
-        account_key = item.get("account", default_account_key).lower()
-        account_id = _resolve_account(account_key)
-        if not account_id:
-            return jsonify({"error": f"Item at index {i}: unknown account '{account_key}'. Use a friendly name {list(ACCOUNT_MAP.keys())} or a valid UUID."}), 400
-        transactions.append(_build_transaction(item["amount"], account_id))
+        transaction, error = _validate_item(item, i, default_account_key)
+        if error:
+            return jsonify({"error": error}), 400
+        transactions.append(transaction)
 
     payload = {"transactions": transactions}
 

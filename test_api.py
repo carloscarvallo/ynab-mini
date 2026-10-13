@@ -1,6 +1,7 @@
 import json
 import os
 import unittest
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import requests
@@ -117,7 +118,7 @@ class TestPostCreate(BaseTestCase):
         self.assertEqual(sent["transactions"][0]["amount"], -9990)
 
     @patch("api.requests.post")
-    def test_memo_is_always_from_script(self, mock_post):
+    def test_memo_defaults_to_from_script(self, mock_post):
         mock_post.return_value = self._mock_post([{"id": "x", "amount": 5000, "memo": "from script", "date": "2026-04-24"}])
 
         self._post([{"amount": 5.0}])
@@ -260,6 +261,124 @@ class TestGetTransactions(BaseTestCase):
         response = self._get(account_key="cc")
 
         self.assertEqual(response.status_code, 401)
+
+
+class TestPostOptionalFields(BaseTestCase):
+    # --- date / payee_name / memo overrides ---
+
+    def _sent_txn(self, mock_post, index=0):
+        return mock_post.call_args.kwargs["json"]["transactions"][index]
+
+    @patch("api.requests.post")
+    def test_date_defaults_to_today(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -5.0}])
+
+        self.assertEqual(self._sent_txn(mock_post)["date"], date.today().isoformat())
+
+    @patch("api.requests.post")
+    def test_explicit_date_is_forwarded(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -50.49, "date": "2026-08-27"}])
+
+        self.assertEqual(self._sent_txn(mock_post)["date"], "2026-08-27")
+
+    def test_malformed_date_returns_400(self):
+        response = self._post([{"amount": -5.0, "date": "27/08/2026"}])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("YYYY-MM-DD", response.get_json()["error"])
+
+    def test_impossible_date_returns_400(self):
+        response = self._post([{"amount": -5.0, "date": "2026-02-31"}])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("YYYY-MM-DD", response.get_json()["error"])
+
+    def test_non_string_date_returns_400(self):
+        response = self._post([{"amount": -5.0, "date": 20260827}])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("YYYY-MM-DD", response.get_json()["error"])
+
+    @patch("api.requests.post")
+    def test_payee_name_is_forwarded(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -50.49, "payee_name": "Deliveroo"}])
+
+        self.assertEqual(self._sent_txn(mock_post)["payee_name"], "Deliveroo")
+
+    @patch("api.requests.post")
+    def test_payee_name_omitted_when_not_given(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -5.0}])
+
+        self.assertNotIn("payee_name", self._sent_txn(mock_post))
+
+    def test_non_string_payee_name_returns_400(self):
+        response = self._post([{"amount": -5.0, "payee_name": 42}])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("'payee_name' must be a string", response.get_json()["error"])
+
+    @patch("api.requests.post")
+    def test_explicit_memo_overrides_default(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -5.0, "memo": "Revolut import"}])
+
+        self.assertEqual(self._sent_txn(mock_post)["memo"], "Revolut import")
+
+    def test_non_string_memo_returns_400(self):
+        response = self._post([{"amount": -5.0, "memo": ["nope"]}])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("'memo' must be a string", response.get_json()["error"])
+
+    def test_non_object_item_returns_400(self):
+        response = self._post([5])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("must be a JSON object", response.get_json()["error"])
+
+    @patch("api.requests.post")
+    def test_all_optional_fields_together(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{
+            "amount": -62.0,
+            "date": "2026-08-26",
+            "payee_name": "SANA Hotels",
+            "memo": "Lisbon trip",
+            "account": "cc",
+        }])
+
+        sent = self._sent_txn(mock_post)
+        self.assertEqual(sent["date"], "2026-08-26")
+        self.assertEqual(sent["payee_name"], "SANA Hotels")
+        self.assertEqual(sent["memo"], "Lisbon trip")
+        self.assertEqual(sent["amount"], -62000)
+        self.assertEqual(sent["account_id"], REVOLUT_CC_ACCOUNT_ID)
+
+
+class TestMilliunitRounding(BaseTestCase):
+    # --- float-to-milliunit conversion must not truncate ---
+
+    @patch("api.requests.post")
+    def test_amount_with_float_representation_error_rounds_correctly(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -50.49}])
+
+        sent = mock_post.call_args.kwargs["json"]["transactions"][0]
+        self.assertEqual(sent["amount"], -50490)
+
+    @patch("api.requests.post")
+    def test_several_cent_amounts_round_correctly(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -39.84}, {"amount": -38.40}, {"amount": -70.28}, {"amount": -56.90}])
+
+        sent = mock_post.call_args.kwargs["json"]["transactions"]
+        self.assertEqual([t["amount"] for t in sent], [-39840, -38400, -70280, -56900])
 
 
 if __name__ == "__main__":
