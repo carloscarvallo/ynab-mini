@@ -23,6 +23,34 @@ python api.py
 # Listening on http://localhost:5001
 ```
 
+### Web UI (one command)
+
+A small React page (server-rendered, no build step) for `POST /transactions`. You give it
+an account, an optional budget ID and the path to a JSON file — the same file you would pass
+to `curl --data-binary @file`.
+
+One-time setup (Node 22+):
+
+```bash
+npm install
+```
+
+Start the API **and** the web UI together:
+
+```bash
+npm start
+# api → http://localhost:5001
+# web → http://127.0.0.1:5173
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `YNAB_API_URL` | `http://localhost:5001` | Flask API the UI posts to |
+| `WEB_PORT` | `5173` | Port for the web UI |
+
+The UI listens on `127.0.0.1` only, because it reads files from local paths. A path that
+starts with `~/` is expanded to your home directory. Run the UI tests with `npm test`.
+
 ---
 
 ## Endpoints

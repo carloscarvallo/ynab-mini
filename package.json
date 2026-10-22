@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "concurrently --kill-others --names api,web --prefix-colors blue,green \".venv/bin/python api.py\" \"tsx web/app.tsx\"",
     "test": "node --import tsx --test \"web/**/*.test.tsx\"",
     "typecheck": "tsc --noEmit"
   },
@@ -14,6 +15,7 @@
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "concurrently": "10.0.6",
     "tsx": "4.23.15",
     "typescript": "6.0.3"
   }
