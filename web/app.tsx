@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -240,4 +242,78 @@ function Page({ values, result }: PageProps) {
 
 export function renderPage(props: PageProps): string {
   return `<!DOCTYPE html>${renderToStaticMarkup(<Page {...props} />)}`;
+}
+
+const MAX_BODY_BYTES = 64 * 1024;
+const EMPTY_VALUES: FormValues = { account: "", budget: "", filePath: "" };
+
+async function readBody(request: IncomingMessage): Promise<string | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) return null;
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function formValuesFrom(body: string): FormValues {
+  const params = new URLSearchParams(body);
+  return {
+    account: params.get("account") ?? "",
+    budget: params.get("budget") ?? "",
+    filePath: params.get("filePath") ?? "",
+  };
+}
+
+function sendHtml(response: ServerResponse, status: number, html: string): void {
+  response.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+  response.end(html);
+}
+
+async function handleSubmit(
+  request: IncomingMessage,
+  response: ServerResponse,
+  apiBase: string,
+  fetchImpl: typeof fetch,
+): Promise<void> {
+  const body = await readBody(request);
+  if (body === null) {
+    sendHtml(response, 413, renderPage({ values: EMPTY_VALUES, result: { ok: false, error: "Request body is too large" } }));
+    return;
+  }
+
+  const values = formValuesFrom(body);
+  const result = await submitTransactions(values, apiBase, fetchImpl);
+  const status = result.ok ? 200 : (result.status ?? 400);
+  sendHtml(response, status, renderPage({ values, result }));
+}
+
+export function createAppServer(apiBase: string, fetchImpl: typeof fetch = fetch): Server {
+  return createServer(async (request, response) => {
+    const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (path !== "/") {
+      sendHtml(response, 404, "Not found");
+      return;
+    }
+    if (request.method === "POST") {
+      await handleSubmit(request, response, apiBase, fetchImpl);
+      return;
+    }
+    sendHtml(response, 200, renderPage({ values: EMPTY_VALUES }));
+  });
+}
+
+const DEFAULT_API_URL = "http://localhost:5001";
+const DEFAULT_WEB_PORT = 5173;
+// Loopback only: the server reads arbitrary local file paths.
+const HOST = "127.0.0.1";
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const apiBase = process.env.YNAB_API_URL ?? DEFAULT_API_URL;
+  const port = Number(process.env.WEB_PORT ?? DEFAULT_WEB_PORT);
+  createAppServer(apiBase).listen(port, HOST, () => {
+    process.stdout.write(`YNAB Import UI on http://${HOST}:${port} (API: ${apiBase})\n`);
+  });
 }

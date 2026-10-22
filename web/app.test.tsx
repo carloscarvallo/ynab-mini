@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, test } from "node:test";
+import type { AddressInfo } from "node:net";
+import { after, before, describe, test } from "node:test";
 
 import {
   buildTransactionsUrl,
+  createAppServer,
   expandHome,
   formatAmount,
   readTransactionsFile,
@@ -224,5 +226,77 @@ describe("renderPage", () => {
     const html = renderPage({ values: { ...EMPTY, account: '"><script>x</script>' } });
 
     assert.doesNotMatch(html, /<script>x<\/script>/);
+  });
+});
+
+describe("createAppServer", () => {
+  const created = [{ id: "t1", date: "2026-10-16", payee_name: "SPI", memo: "Ref 1", amount: 7200000 }];
+  const api = fakeFetch(201, { created: 1, transactions: created });
+  const server = createAppServer("http://api.test", api.fetchImpl);
+  let baseUrl = "";
+
+  before(async () => {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+  test("GET / returns the empty form as HTML", async () => {
+    const response = await fetch(`${baseUrl}/`);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.match(await response.text(), /<button type="submit">Send transactions<\/button>/);
+  });
+
+  test("POST / sends the file to the API and renders the created transactions", async () => {
+    const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
+    const form = new URLSearchParams({ account: ACCOUNT, budget: BUDGET, filePath });
+
+    const response = await fetch(`${baseUrl}/`, { method: "POST", body: form });
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /Created 1 transaction</);
+    assert.match(html, new RegExp(`value="${ACCOUNT}"`));
+    assert.equal(api.calls.at(-1)?.url, `http://api.test/transactions/${ACCOUNT}?budget=${BUDGET}`);
+  });
+
+  test("POST / renders the error with the API status code", async () => {
+    const failing = fakeFetch(404, { error: "Resource not found" });
+    const failingServer = createAppServer("http://api.test", failing.fetchImpl);
+    await new Promise<void>((resolve) => failingServer.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(failingServer.address() as AddressInfo).port}/`;
+    const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
+
+    try {
+      const response = await fetch(url, { method: "POST", body: new URLSearchParams({ account: ACCOUNT, budget: "", filePath }) });
+
+      assert.equal(response.status, 404);
+      assert.match(await response.text(), /Resource not found/);
+    } finally {
+      await new Promise<void>((resolve) => failingServer.close(() => resolve()));
+    }
+  });
+
+  test("POST / with missing fields returns 400 and the validation error", async () => {
+    const response = await fetch(`${baseUrl}/`, { method: "POST", body: new URLSearchParams({ account: "" }) });
+
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /Account is required/);
+  });
+
+  test("POST / rejects an oversized body with 413", async () => {
+    const response = await fetch(`${baseUrl}/`, { method: "POST", body: "a".repeat(65 * 1024) });
+
+    assert.equal(response.status, 413);
+    assert.match(await response.text(), /Request body is too large/);
+  });
+
+  test("unknown paths return 404", async () => {
+    const response = await fetch(`${baseUrl}/nope`);
+
+    assert.equal(response.status, 404);
   });
 });
