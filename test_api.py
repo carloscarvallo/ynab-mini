@@ -9,7 +9,7 @@ import requests
 os.environ.setdefault("YNAB_ACCOUNT_ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 os.environ.setdefault("YNAB_REVOLUT_CC_ACCOUNT_ID", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 
-from api import ACCOUNT_MAP, ACCOUNT_ID, REVOLUT_CC_ACCOUNT_ID, app
+from api import ACCOUNT_MAP, ACCOUNT_ID, BASE_URL, BUDGET_ID, REVOLUT_CC_ACCOUNT_ID, app
 
 
 class BaseTestCase(unittest.TestCase):
@@ -357,6 +357,79 @@ class TestPostOptionalFields(BaseTestCase):
         self.assertEqual(sent["memo"], "Lisbon trip")
         self.assertEqual(sent["amount"], -62000)
         self.assertEqual(sent["account_id"], REVOLUT_CC_ACCOUNT_ID)
+
+
+class TestBudgetSelection(BaseTestCase):
+    # --- ?budget= query param ---
+
+    OTHER_BUDGET = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+    @patch("api.requests.get")
+    def test_get_defaults_to_env_budget(self, mock_get):
+        mock_get.return_value = self._mock_get([])
+
+        self._get()
+
+        self.assertEqual(mock_get.call_args.args[0], f"{BASE_URL}/budgets/{BUDGET_ID}/transactions")
+
+    @patch("api.requests.get")
+    def test_get_budget_query_param_overrides_default(self, mock_get):
+        mock_get.return_value = self._mock_get([])
+
+        response = self.client.get(f"/transactions?budget={self.OTHER_BUDGET}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_get.call_args.args[0], f"{BASE_URL}/budgets/{self.OTHER_BUDGET}/transactions")
+
+    @patch("api.requests.post")
+    def test_post_defaults_to_env_budget(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        self._post([{"amount": -5.0}])
+
+        self.assertEqual(mock_post.call_args.args[0], f"{BASE_URL}/budgets/{BUDGET_ID}/transactions")
+
+    @patch("api.requests.post")
+    def test_post_budget_query_param_overrides_default(self, mock_post):
+        mock_post.return_value = self._mock_post([{"id": "x"}])
+
+        response = self.client.post(
+            f"/transactions/cc?budget={self.OTHER_BUDGET}",
+            data=json.dumps([{"amount": -5.0}]),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(mock_post.call_args.args[0], f"{BASE_URL}/budgets/{self.OTHER_BUDGET}/transactions")
+
+    @patch("api.requests.get")
+    def test_last_used_budget_is_accepted(self, mock_get):
+        mock_get.return_value = self._mock_get([])
+
+        response = self.client.get("/transactions?budget=last-used")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_get.call_args.args[0], f"{BASE_URL}/budgets/last-used/transactions")
+
+    @patch("api.requests.get")
+    def test_get_invalid_budget_returns_400(self, mock_get):
+        response = self.client.get("/transactions?budget=../user")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid budget", response.get_json()["error"])
+        mock_get.assert_not_called()
+
+    @patch("api.requests.post")
+    def test_post_invalid_budget_returns_400(self, mock_post):
+        response = self.client.post(
+            "/transactions?budget=not-a-uuid",
+            data=json.dumps([{"amount": -5.0}]),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid budget", response.get_json()["error"])
+        mock_post.assert_not_called()
 
 
 class TestMilliunitRounding(BaseTestCase):

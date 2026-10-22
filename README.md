@@ -35,6 +35,7 @@ Fetch transactions for an account.
 |---|---|---|
 | `account` | URL segment | `checking` (default), `cc`, or a raw account UUID |
 | `since` | query | Start date `YYYY-MM-DD` (default: first day of current month) |
+| `budget` | query | Budget UUID, `last-used` or `default` (default: `YNAB_BUDGET_ID`) |
 
 ```bash
 curl "http://localhost:5001/transactions?since=2026-01-01"
@@ -49,6 +50,7 @@ transaction.
 | Param | Type | Description |
 |---|---|---|
 | `account` | URL segment | Default account for every item: `checking` (default), `cc`, or a raw account UUID |
+| `budget` | query | Budget UUID, `last-used` or `default` (default: `YNAB_BUDGET_ID`) |
 
 Per-item fields:
 
@@ -79,6 +81,9 @@ curl -X POST http://localhost:5001/transactions/8f3c1e20-1234-4a5b-9c0d-ab12cd34
         {"amount": -39.84, "date": "2026-08-26", "payee_name": "El Corte Inglés", "account": "cc"}
       ]'
 ```
+
+Friendly account names (`checking`, `cc`) map to accounts in the default budget. When you
+pass `?budget=` for another budget, use raw account UUIDs from that budget.
 
 Validation runs over the whole array before anything is sent. The first bad item aborts the
 request with `400` and an error naming its index — nothing is created. YNAB HTTP errors are

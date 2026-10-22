@@ -39,6 +39,20 @@ def _resolve_account(key: str) -> str | None:
     return None
 
 
+BUDGET_ALIASES = {"last-used", "default"}
+INVALID_BUDGET_ERROR = "Invalid budget. Use a budget UUID, 'last-used' or 'default'."
+
+
+def _resolve_budget(budget_id: str) -> str | None:
+    if budget_id in BUDGET_ALIASES or UUID_RE.match(budget_id):
+        return budget_id
+    return None
+
+
+def _budget_from_args() -> str | None:
+    return _resolve_budget(request.args.get("budget", BUDGET_ID))
+
+
 DEFAULT_MEMO = "from script"
 
 
@@ -102,11 +116,15 @@ def get_transactions(account_key: str = "checking"):
     if not account_id:
         return jsonify({"error": f"Unknown account '{account_key}'. Use a friendly name {list(ACCOUNT_MAP.keys())} or a valid UUID."}), 400
 
+    budget_id = _budget_from_args()
+    if not budget_id:
+        return jsonify({"error": INVALID_BUDGET_ERROR}), 400
+
     since_date = request.args.get("since", date.today().replace(day=1).isoformat())
 
     try:
         response = requests.get(
-            f"{BASE_URL}/budgets/{BUDGET_ID}/transactions",
+            f"{BASE_URL}/budgets/{budget_id}/transactions",
             headers=YNAB_HEADERS,
             params={"since_date": since_date, "account_id": account_id},
         )
@@ -121,6 +139,10 @@ def get_transactions(account_key: str = "checking"):
 @app.post("/transactions")
 @app.post("/transactions/<default_account_key>")
 def post_transactions(default_account_key: str = "checking"):
+    budget_id = _budget_from_args()
+    if not budget_id:
+        return jsonify({"error": INVALID_BUDGET_ERROR}), 400
+
     body = request.get_json(silent=True)
 
     if not isinstance(body, list) or len(body) == 0:
@@ -137,7 +159,7 @@ def post_transactions(default_account_key: str = "checking"):
 
     try:
         response = requests.post(
-            f"{BASE_URL}/budgets/{BUDGET_ID}/transactions",
+            f"{BASE_URL}/budgets/{budget_id}/transactions",
             headers=YNAB_HEADERS,
             json=payload,
         )
