@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
 
@@ -186,46 +187,88 @@ function openingTag(html: string, start: RegExp): string {
   return html.slice(index, html.indexOf(">", index) + 1);
 }
 
+function between(html: string, start: string, end: string): string {
+  const index = html.indexOf(start);
+  assert.notEqual(index, -1, `no ${start}`);
+  return html.slice(index, html.indexOf(end, index) + end.length);
+}
+
 describe("renderPage", () => {
   const EMPTY = { account: "", budget: "", filePath: "" };
 
   test("renders a doctype and a labelled form that posts to the server", () => {
-    const html = renderPage({ values: EMPTY });
+    const html = renderPage({ config: CONFIG, values: EMPTY });
 
     const form = openingTag(html, /<form\b/);
-    const account = openingTag(html, /<input id="account"/);
-    const budget = openingTag(html, /<input id="budget"/);
+    const budget = openingTag(html, /<select id="budget"/);
+    const account = openingTag(html, /<select id="account"/);
     const filePath = openingTag(html, /<input id="filePath"/);
 
     assert.ok(html.startsWith("<!DOCTYPE html>"));
     assert.ok(form.includes('method="post"') && form.includes('action="/"'));
+    assert.match(html, /<label for="budget">Budget<\/label>/);
+    assert.ok(budget.includes('name="budget"') && budget.includes('required=""'));
     assert.match(html, /<label for="account">Account<\/label>/);
     assert.ok(account.includes('name="account"') && account.includes('required=""'));
-    assert.match(html, /<label for="budget">Budget ID<\/label>/);
-    assert.ok(budget.includes('name="budget"') && !budget.includes("required"));
     assert.match(html, /<label for="filePath">File path<\/label>/);
     assert.ok(filePath.includes('name="filePath"') && filePath.includes('required=""'));
     assert.match(html, /<button type="submit">Send transactions<\/button>/);
   });
 
+  test("lists every budget from the config", () => {
+    const budgets = between(renderPage({ config: CONFIG, values: EMPTY }), '<select id="budget"', "</select>");
+
+    assert.match(budgets, new RegExp(`<option value="${BUDGET}"[^>]*>Personal</option>`));
+    assert.match(budgets, new RegExp(`<option value="${OTHER_BUDGET}"[^>]*>Business</option>`));
+  });
+
+  test("shows only the first budget's accounts by default", () => {
+    const accounts = between(renderPage({ config: CONFIG, values: EMPTY }), '<select id="account"', "</select>");
+
+    assert.match(accounts, new RegExp(`<option value="${ACCOUNT}"[^>]*>Itau Checking</option>`));
+    assert.match(accounts, />Revolut</);
+    assert.doesNotMatch(accounts, /Business Checking/);
+  });
+
+  test("shows the accounts of the submitted budget and keeps the submitted values", () => {
+    const values = { budget: OTHER_BUDGET, account: OTHER_ACCOUNT, filePath: "/tmp/t.json" };
+    const html = renderPage({ config: CONFIG, values });
+    const budgets = between(html, '<select id="budget"', "</select>");
+    const accounts = between(html, '<select id="account"', "</select>");
+
+    assert.match(budgets, new RegExp(`<option value="${OTHER_BUDGET}" selected="">`));
+    assert.match(accounts, new RegExp(`<option value="${OTHER_ACCOUNT}" selected="">Business Checking</option>`));
+    assert.doesNotMatch(accounts, /Itau Checking/);
+    assert.match(html, /value="\/tmp\/t.json"/);
+  });
+
+  test("renders a template of account options per budget for the budget switcher", () => {
+    const html = renderPage({ config: CONFIG, values: EMPTY });
+
+    assert.match(between(html, `<template data-budget="${BUDGET}">`, "</template>"), /Itau Checking.*Revolut/);
+    assert.match(between(html, `<template data-budget="${OTHER_BUDGET}">`, "</template>"), /Business Checking/);
+    assert.match(html, /<script>[^<]*addEventListener\("change"/);
+  });
+
+  test("shows the config error instead of the form", () => {
+    const html = renderPage({ configError: "Cannot read file 'web/accounts.json'", values: EMPTY });
+
+    assert.match(html, /role="alert"/);
+    assert.match(html, /Cannot read file &#x27;web\/accounts.json&#x27;/);
+    assert.match(html, /accounts.example.json/);
+    assert.doesNotMatch(html, /<form\b/);
+  });
+
   test("shows no result panel before a submit", () => {
-    const html = renderPage({ values: EMPTY });
+    const html = renderPage({ config: CONFIG, values: EMPTY });
 
     assert.doesNotMatch(html, /role="alert"/);
     assert.doesNotMatch(html, /role="status"/);
   });
 
-  test("keeps the submitted values in the inputs", () => {
-    const html = renderPage({ values: { account: ACCOUNT, budget: BUDGET, filePath: "/tmp/t.json" } });
-
-    assert.match(html, new RegExp(`value="${ACCOUNT}"`));
-    assert.match(html, new RegExp(`value="${BUDGET}"`));
-    assert.match(html, /value="\/tmp\/t.json"/);
-  });
-
   test("lists created transactions with formatted amounts", () => {
     const transactions = [{ id: "t1", date: "2026-10-16", payee_name: "SPI", memo: "Ref 1", amount: 7200000 }];
-    const html = renderPage({ values: EMPTY, result: { ok: true, status: 201, transactions } });
+    const html = renderPage({ config: CONFIG, values: EMPTY, result: { ok: true, status: 201, transactions } });
 
     assert.match(html, /role="status"/);
     assert.match(html, /Created 1 transaction</);
@@ -233,76 +276,135 @@ describe("renderPage", () => {
   });
 
   test("shows the error and status code in an alert", () => {
-    const html = renderPage({ values: EMPTY, result: { ok: false, status: 400, error: "Invalid budget." } });
+    const result = { ok: false as const, status: 400, error: "Invalid budget." };
+    const html = renderPage({ config: CONFIG, values: EMPTY, result });
 
     assert.match(html, /role="alert"/);
     assert.match(html, /HTTP 400/);
     assert.match(html, /Invalid budget\./);
   });
 
-  test("escapes user input", () => {
-    const html = renderPage({ values: { ...EMPTY, account: '"><script>x</script>' } });
+  test("escapes user input and config labels", () => {
+    const config = { budgets: [{ label: "<script>b</script>", id: "b", accounts: [{ label: "<script>a</script>", id: "a" }] }] };
+    const html = renderPage({ config, values: { ...EMPTY, filePath: '"><script>x</script>' } });
 
-    assert.doesNotMatch(html, /<script>x<\/script>/);
+    assert.doesNotMatch(html, /<script>[xab]<\/script>/);
   });
 });
+
+async function listen(server: Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+function close(server: Server): Promise<void> {
+  return new Promise<void>((resolve) => server.close(() => resolve()));
+}
 
 describe("createAppServer", () => {
   const created = [{ id: "t1", date: "2026-10-16", payee_name: "SPI", memo: "Ref 1", amount: 7200000 }];
   const api = fakeFetch(201, { created: 1, transactions: created });
-  const server = createAppServer("http://api.test", api.fetchImpl);
+  let configPath = "";
+  let server: Server;
   let baseUrl = "";
 
   before(async () => {
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    configPath = await writeTempFile("accounts.json", JSON.stringify(CONFIG));
+    server = createAppServer("http://api.test", configPath, api.fetchImpl);
+    baseUrl = await listen(server);
   });
 
-  after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  after(() => close(server));
 
-  test("GET / returns the empty form as HTML", async () => {
+  test("GET / returns the form with the budgets from the config", async () => {
     const response = await fetch(`${baseUrl}/`);
+    const html = await response.text();
 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
-    assert.match(await response.text(), /<button type="submit">Send transactions<\/button>/);
+    assert.match(html, /<button type="submit">Send transactions<\/button>/);
+    assert.match(html, />Personal<\/option>/);
+  });
+
+  test("GET / reads the config again on every request", async () => {
+    const extended = { budgets: [...CONFIG.budgets, { label: "Travel", id: "t", accounts: [{ label: "Wise", id: "w" }] }] };
+    const path = await writeTempFile("accounts.json", JSON.stringify(CONFIG));
+    const liveServer = createAppServer("http://api.test", path, api.fetchImpl);
+    const url = await listen(liveServer);
+
+    try {
+      assert.doesNotMatch(await (await fetch(url)).text(), />Travel</);
+      await writeFile(path, JSON.stringify(extended));
+      assert.match(await (await fetch(url)).text(), />Travel<\/option>/);
+    } finally {
+      await close(liveServer);
+    }
+  });
+
+  test("GET / returns 500 with the config error when the config is missing", async () => {
+    const brokenServer = createAppServer("http://api.test", "/nope/accounts.json", api.fetchImpl);
+    const url = await listen(brokenServer);
+
+    try {
+      const response = await fetch(url);
+      const html = await response.text();
+
+      assert.equal(response.status, 500);
+      assert.match(html, /Cannot read file &#x27;\/nope\/accounts.json&#x27;/);
+      assert.doesNotMatch(html, /<form\b/);
+    } finally {
+      await close(brokenServer);
+    }
   });
 
   test("POST / sends the file to the API and renders the created transactions", async () => {
     const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
-    const form = new URLSearchParams({ account: ACCOUNT, budget: BUDGET, filePath });
+    const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath });
 
     const response = await fetch(`${baseUrl}/`, { method: "POST", body: form });
     const html = await response.text();
 
     assert.equal(response.status, 200);
     assert.match(html, /Created 1 transaction</);
-    assert.match(html, new RegExp(`value="${ACCOUNT}"`));
+    assert.match(html, new RegExp(`<option value="${ACCOUNT}" selected="">`));
     assert.equal(api.calls.at(-1)?.url, `http://api.test/transactions/${ACCOUNT}?budget=${BUDGET}`);
+  });
+
+  test("POST / rejects an account from another budget without calling the API", async () => {
+    const callsBefore = api.calls.length;
+    const form = new URLSearchParams({ budget: BUDGET, account: OTHER_ACCOUNT, filePath: "/tmp/t.json" });
+
+    const response = await fetch(`${baseUrl}/`, { method: "POST", body: form });
+
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /The selected account does not belong to the selected budget/);
+    assert.equal(api.calls.length, callsBefore);
   });
 
   test("POST / renders the error with the API status code", async () => {
     const failing = fakeFetch(404, { error: "Resource not found" });
-    const failingServer = createAppServer("http://api.test", failing.fetchImpl);
-    await new Promise<void>((resolve) => failingServer.listen(0, "127.0.0.1", resolve));
-    const url = `http://127.0.0.1:${(failingServer.address() as AddressInfo).port}/`;
+    const failingServer = createAppServer("http://api.test", configPath, failing.fetchImpl);
+    const url = await listen(failingServer);
     const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
 
     try {
-      const response = await fetch(url, { method: "POST", body: new URLSearchParams({ account: ACCOUNT, budget: "", filePath }) });
+      const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath });
+      const response = await fetch(url, { method: "POST", body: form });
 
       assert.equal(response.status, 404);
       assert.match(await response.text(), /Resource not found/);
     } finally {
-      await new Promise<void>((resolve) => failingServer.close(() => resolve()));
+      await close(failingServer);
     }
   });
 
-  test("POST / with missing fields returns 400 and the validation error", async () => {
-    const response = await fetch(`${baseUrl}/`, { method: "POST", body: new URLSearchParams({ account: "" }) });
+  test("POST / with a missing file path returns 400 and the validation error", async () => {
+    const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT });
+
+    const response = await fetch(`${baseUrl}/`, { method: "POST", body: form });
 
     assert.equal(response.status, 400);
-    assert.match(await response.text(), /Account is required/);
+    assert.match(await response.text(), /File path is required/);
   });
 
   test("POST / rejects an oversized body with 413", async () => {

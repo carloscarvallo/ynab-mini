@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -166,8 +166,8 @@ h1 { font: 600 2.6rem/1.05 var(--font-display); margin: 0 0 0.25rem; letter-spac
 .lede { color: var(--muted); margin: 0 0 2.5rem; }
 form { display: grid; gap: 1.25rem; padding: 1.5rem 0; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--rule); }
 label { display: block; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.35rem; }
-input { width: 100%; padding: 0.6rem 0.7rem; font: 0.95rem var(--font-mono); color: var(--ink); background: #fffdf8; border: 1px solid var(--rule); border-radius: var(--radius); }
-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+input, select { width: 100%; padding: 0.6rem 0.7rem; font: 0.95rem var(--font-mono); color: var(--ink); background: #fffdf8; border: 1px solid var(--rule); border-radius: var(--radius); }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 button { justify-self: start; padding: 0.7rem 1.4rem; font: 600 0.95rem system-ui, sans-serif; color: var(--paper); background: var(--ink); border: 0; border-radius: var(--radius); cursor: pointer; transition: transform 150ms ease-out, background 150ms ease-out; }
 button:hover { background: var(--accent); }
 button:active { transform: translateY(1px); }
@@ -196,13 +196,52 @@ function Field({ name, label, hint, value, isRequired = false }: FieldProps) {
   );
 }
 
-function TransactionForm({ values }: { values: FormValues }) {
+function selectedBudget(config: AccountsConfig, budgetId: string): BudgetOption {
+  return config.budgets.find(({ id }) => id === budgetId) ?? config.budgets[0];
+}
+
+function Options({ options }: { options: AccountOption[] }) {
+  return (
+    <>
+      {options.map(({ id, label }) => (
+        <option key={id} value={id}>
+          {label}
+        </option>
+      ))}
+    </>
+  );
+}
+
+// Swaps the account options when the budget changes. A constant, never user input.
+const ACCOUNT_SWITCHER = `document.getElementById("budget").addEventListener("change", (event) => {
+  const template = document.querySelector('template[data-budget="' + CSS.escape(event.target.value) + '"]');
+  document.getElementById("account").replaceChildren(template.content.cloneNode(true));
+});`;
+
+function TransactionForm({ config, values }: { config: AccountsConfig; values: FormValues }) {
+  const budget = selectedBudget(config, values.budget);
   return (
     <form method="post" action="/">
-      <Field name="account" label="Account" hint="Account UUID, checking or cc" value={values.account} isRequired />
-      <Field name="budget" label="Budget ID" hint="Budget UUID (blank uses the default)" value={values.budget} />
+      <div>
+        <label htmlFor="budget">Budget</label>
+        <select id="budget" name="budget" required defaultValue={budget.id}>
+          <Options options={config.budgets} />
+        </select>
+      </div>
+      <div>
+        <label htmlFor="account">Account</label>
+        <select id="account" name="account" required defaultValue={values.account}>
+          <Options options={budget.accounts} />
+        </select>
+      </div>
       <Field name="filePath" label="File path" hint="/path/to/transactions.json" value={values.filePath} isRequired />
       <button type="submit">Send transactions</button>
+      {config.budgets.map(({ id, accounts }) => (
+        <template key={id} data-budget={id}>
+          <Options options={accounts} />
+        </template>
+      ))}
+      <script dangerouslySetInnerHTML={{ __html: ACCOUNT_SWITCHER }} />
     </form>
   );
 }
@@ -257,6 +296,16 @@ function ErrorPanel({ status, error }: { status?: number; error: string }) {
   );
 }
 
+function ConfigErrorPanel({ error }: { error: string }) {
+  return (
+    <section className="result error" role="alert">
+      <strong>Accounts config</strong>
+      {error}
+      {"\nCopy web/accounts.example.json to web/accounts.json and fill in your budget and account IDs."}
+    </section>
+  );
+}
+
 function ResultPanel({ result }: { result: SubmitResult }) {
   return result.ok ? (
     <SuccessPanel transactions={result.transactions} />
@@ -265,9 +314,13 @@ function ResultPanel({ result }: { result: SubmitResult }) {
   );
 }
 
-export type PageProps = { values: FormValues; result?: SubmitResult };
+export type PageProps = { values: FormValues; result?: SubmitResult } & (
+  | { config: AccountsConfig }
+  | { configError: string }
+);
 
-function Page({ values, result }: PageProps) {
+function Page(props: PageProps) {
+  const { values, result } = props;
   return (
     <html lang="en">
       <head>
@@ -281,7 +334,11 @@ function Page({ values, result }: PageProps) {
         <main>
           <h1>YNAB Import</h1>
           <p className="lede">Send a JSON file of transactions to an account.</p>
-          <TransactionForm values={values} />
+          {"config" in props ? (
+            <TransactionForm config={props.config} values={values} />
+          ) : (
+            <ConfigErrorPanel error={props.configError} />
+          )}
           {result && <ResultPanel result={result} />}
         </main>
       </body>
@@ -324,45 +381,61 @@ function sendHtml(response: ServerResponse, status: number, html: string): void 
 async function handleSubmit(
   request: IncomingMessage,
   response: ServerResponse,
+  config: AccountsConfig,
   apiBase: string,
   fetchImpl: typeof fetch,
 ): Promise<void> {
   const body = await readBody(request);
   if (body === null) {
-    sendHtml(response, 413, renderPage({ values: EMPTY_VALUES, result: { ok: false, error: "Request body is too large" } }));
+    const result = { ok: false as const, error: "Request body is too large" };
+    sendHtml(response, 413, renderPage({ config, values: EMPTY_VALUES, result }));
     return;
   }
 
   const values = formValuesFrom(body);
-  const result = await submitTransactions(values, apiBase, fetchImpl);
+  const mismatch = checkSelection(config, values.budget, values.account);
+  const result = mismatch
+    ? { ok: false as const, error: mismatch }
+    : await submitTransactions(values, apiBase, fetchImpl);
   const status = result.ok ? 200 : (result.status ?? 400);
-  sendHtml(response, status, renderPage({ values, result }));
+  sendHtml(response, status, renderPage({ config, values, result }));
 }
 
-export function createAppServer(apiBase: string, fetchImpl: typeof fetch = fetch): Server {
+export function createAppServer(apiBase: string, configPath: string, fetchImpl: typeof fetch = fetch): Server {
   return createServer(async (request, response) => {
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
     if (path !== "/") {
       sendHtml(response, 404, "Not found");
       return;
     }
-    if (request.method === "POST") {
-      await handleSubmit(request, response, apiBase, fetchImpl);
+
+    // Read on every request so edits to the config apply without a restart.
+    let config: AccountsConfig;
+    try {
+      config = await loadAccountsConfig(configPath);
+    } catch (error: unknown) {
+      sendHtml(response, 500, renderPage({ configError: errorMessage(error), values: EMPTY_VALUES }));
       return;
     }
-    sendHtml(response, 200, renderPage({ values: EMPTY_VALUES }));
+
+    if (request.method === "POST") {
+      await handleSubmit(request, response, config, apiBase, fetchImpl);
+      return;
+    }
+    sendHtml(response, 200, renderPage({ config, values: EMPTY_VALUES }));
   });
 }
 
 const DEFAULT_API_URL = "http://localhost:5001";
 const DEFAULT_WEB_PORT = 5173;
+const CONFIG_PATH = fileURLToPath(new URL("./accounts.json", import.meta.url));
 // Loopback only: the server reads arbitrary local file paths.
 const HOST = "127.0.0.1";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const apiBase = process.env.YNAB_API_URL ?? DEFAULT_API_URL;
   const port = Number(process.env.WEB_PORT ?? DEFAULT_WEB_PORT);
-  createAppServer(apiBase).listen(port, HOST, () => {
+  createAppServer(apiBase, CONFIG_PATH).listen(port, HOST, () => {
     process.stdout.write(`YNAB Import UI on http://${HOST}:${port} (API: ${apiBase})\n`);
   });
 }
