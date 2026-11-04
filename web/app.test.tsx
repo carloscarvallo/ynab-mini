@@ -579,7 +579,7 @@ describe("confirm dialog", () => {
 
   test("shows the budget and account labels and the file path", () => {
     assert.match(dialog, /<dt>Budget<\/dt><dd>Personal<\/dd>/);
-    assert.match(dialog, /<dt>Account<\/dt><dd>Itau Checking<\/dd>/);
+    assert.match(dialog, new RegExp(`<dt>Account</dt><dd>Itau Checking <span class="uuid">\\(${ACCOUNT}\\)</span></dd>`));
     assert.match(dialog, /<dt>File<\/dt><dd>\/tmp\/itau.json<\/dd>/);
   });
 

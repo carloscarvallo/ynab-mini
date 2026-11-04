@@ -237,6 +237,7 @@ summary:hover { color: var(--accent); }
 summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 details[open] summary { border-bottom: 1px solid var(--rule); margin-bottom: 0.5rem; }
 details .table-wrap { padding-bottom: 0.5rem; }
+.uuid { color: var(--muted); font-size: 0.85em; white-space: nowrap; }
 tfoot th { border-top: 1px solid var(--ink); border-bottom: 0; color: var(--ink); }
 dialog form { display: block; padding: 0; border: 0; }
 .dialog-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
@@ -354,7 +355,9 @@ function ConfirmDialog({ budget, account, filePath, transactions }: ConfirmDialo
           <dt>Budget</dt>
           <dd>{budget.label}</dd>
           <dt>Account</dt>
-          <dd>{account.label}</dd>
+          <dd>
+            {account.label} <span className="uuid">({account.id})</span>
+          </dd>
           <dt>File</dt>
           <dd>{filePath}</dd>
         </dl>
