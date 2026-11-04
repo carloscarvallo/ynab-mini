@@ -231,6 +231,12 @@ dialog h2 { font: 600 1.6rem var(--font-display); margin: 0 0 1rem; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; margin: 0 0 1.25rem; }
 dt { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding-top: 0.2rem; }
 dd { margin: 0; font-family: var(--font-mono); word-break: break-all; }
+details { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+summary { padding: 0.75rem 0; font-weight: 600; cursor: pointer; }
+summary:hover { color: var(--accent); }
+summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+details[open] summary { border-bottom: 1px solid var(--rule); margin-bottom: 0.5rem; }
+details .table-wrap { padding-bottom: 0.5rem; }
 tfoot th { border-top: 1px solid var(--ink); border-bottom: 0; color: var(--ink); }
 dialog form { display: block; padding: 0; border: 0; }
 .dialog-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
@@ -352,32 +358,35 @@ function ConfirmDialog({ budget, account, filePath, transactions }: ConfirmDialo
           <dt>File</dt>
           <dd>{filePath}</dd>
         </dl>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Payee</th>
-                <th>Memo</th>
-                <th className="amount">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {transactions.map((transaction, index) => (
-                <TransactionRow
-                  key={index}
-                  transaction={{ ...transaction, amount: unitsToMilliunits(transaction.amount) }}
-                />
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th colSpan={3}>Total</th>
-                <th className="amount">{formatAmount(total)}</th>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+        <details>
+          <summary>{`Transactions to be sent (${transactions.length}) · Total ${formatAmount(total)}`}</summary>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Payee</th>
+                  <th>Memo</th>
+                  <th className="amount">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactions.map((transaction, index) => (
+                  <TransactionRow
+                    key={index}
+                    transaction={{ ...transaction, amount: unitsToMilliunits(transaction.amount) }}
+                  />
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th colSpan={3}>Total</th>
+                  <th className="amount">{formatAmount(total)}</th>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </details>
         <form method="post" action="/">
           <input type="hidden" name="budget" value={budget.id} />
           <input type="hidden" name="account" value={account.id} />

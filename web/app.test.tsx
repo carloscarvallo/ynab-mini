@@ -583,6 +583,13 @@ describe("confirm dialog", () => {
     assert.match(dialog, /<dt>File<\/dt><dd>\/tmp\/itau.json<\/dd>/);
   });
 
+  test("lists the transactions in a collapsed section with the count and total in its summary", () => {
+    const details = between(dialog, "<details", "</details>");
+    assert.ok(!openingTag(details, /<details\b/).includes("open"));
+    assert.match(details, /<summary>Transactions to be sent \(2\) · Total 5,870,000.00<\/summary>/);
+    assert.match(details, /<table>/);
+  });
+
   test("previews each transaction in currency units with the total", () => {
     assert.match(dialog, /<td>2026-10-16<\/td><td>SPI<\/td><td>Ref 1<\/td><td class="amount inflow">7,200,000.00<\/td>/);
     assert.match(dialog, /<td class="amount outflow">-1,330,000.00<\/td>/);
