@@ -1,0 +1,20 @@
+{
+  "budgets": [
+    {
+      "label": "Budget One",
+      "id": "<budget-one-uuid>",
+      "accounts": [
+        { "label": "Account One", "id": "<account-one-uuid>" },
+        { "label": "Account Two", "id": "<account-two-uuid>" },
+        { "label": "Account Three", "id": "<account-three-uuid>" }
+      ]
+    },
+    {
+      "label": "Budget Two",
+      "id": "<budget-two-uuid>",
+      "accounts": [
+        { "label": "Account One", "id": "<account-one-uuid>" }
+      ]
+    }
+  ]
+}

@@ -18,7 +18,7 @@ export function expandHome(path: string): string {
   return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
 }
 
-export async function readTransactionsFile(path: string): Promise<Transaction[]> {
+async function readJsonFile(path: string): Promise<unknown> {
   let raw: string;
   try {
     raw = await readFile(expandHome(path), "utf8");
@@ -26,17 +26,66 @@ export async function readTransactionsFile(path: string): Promise<Transaction[]>
     throw new Error(`Cannot read file '${path}'`);
   }
 
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch {
     throw new Error(`File '${path}' is not valid JSON`);
   }
+}
 
+export async function readTransactionsFile(path: string): Promise<Transaction[]> {
+  const parsed = await readJsonFile(path);
   if (!Array.isArray(parsed)) {
     throw new Error(`File '${path}' must contain a JSON array of transactions`);
   }
   return parsed;
+}
+
+export type AccountOption = { label: string; id: string };
+export type BudgetOption = AccountOption & { accounts: AccountOption[] };
+export type AccountsConfig = { budgets: BudgetOption[] };
+
+function isOption(value: unknown): value is AccountOption {
+  if (typeof value !== "object" || value === null) return false;
+  const { label, id } = value as Record<string, unknown>;
+  return typeof label === "string" && typeof id === "string";
+}
+
+function parseAccountsConfig(parsed: unknown): AccountsConfig {
+  const budgets = (parsed as { budgets?: unknown } | null)?.budgets;
+  if (!Array.isArray(budgets) || budgets.length === 0) {
+    throw new Error("'budgets' must be a non-empty array");
+  }
+  return {
+    budgets: budgets.map((budget: unknown, b: number) => {
+      if (!isOption(budget)) throw new Error(`budgets[${b}] needs a string 'label' and 'id'`);
+      const { accounts } = budget as { accounts?: unknown };
+      if (!Array.isArray(accounts) || accounts.length === 0) {
+        throw new Error(`budgets[${b}].accounts must be a non-empty array`);
+      }
+      return {
+        label: budget.label,
+        id: budget.id,
+        accounts: accounts.map((account: unknown, a: number) => {
+          if (!isOption(account)) throw new Error(`budgets[${b}].accounts[${a}] needs a string 'label' and 'id'`);
+          return { label: account.label, id: account.id };
+        }),
+      };
+    }),
+  };
+}
+
+export async function loadAccountsConfig(path: string): Promise<AccountsConfig> {
+  return parseAccountsConfig(await readJsonFile(path));
+}
+
+export function checkSelection(config: AccountsConfig, budgetId: string, accountId: string): string | null {
+  const budget = config.budgets.find(({ id }) => id === budgetId);
+  if (!budget) return "Choose a budget from the list";
+  if (!budget.accounts.some(({ id }) => id === accountId)) {
+    return "The selected account does not belong to the selected budget";
+  }
+  return null;
 }
 
 export type FormValues = { account: string; budget: string; filePath: string };

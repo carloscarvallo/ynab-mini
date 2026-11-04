@@ -6,10 +6,13 @@ import type { AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
 
 import {
+  type AccountsConfig,
   buildTransactionsUrl,
+  checkSelection,
   createAppServer,
   expandHome,
   formatAmount,
+  loadAccountsConfig,
   readTransactionsFile,
   renderPage,
   submitTransactions,
@@ -17,6 +20,21 @@ import {
 
 const ACCOUNT = "b5cdc269-13bb-4c3d-b51d-604a453978f4";
 const BUDGET = "7fe20706-e3ee-40c9-8e27-20dcc0f79485";
+const OTHER_BUDGET = "11111111-2222-3333-4444-555555555555";
+const OTHER_ACCOUNT = "66666666-7777-8888-9999-000000000000";
+const CONFIG: AccountsConfig = {
+  budgets: [
+    {
+      label: "Personal",
+      id: BUDGET,
+      accounts: [
+        { label: "Itau Checking", id: ACCOUNT },
+        { label: "Revolut", id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" },
+      ],
+    },
+    { label: "Business", id: OTHER_BUDGET, accounts: [{ label: "Business Checking", id: OTHER_ACCOUNT }] },
+  ],
+};
 const TXNS = [{ amount: 7200000, date: "2026-10-16", payee_name: "SPI", memo: "Ref 1" }];
 
 async function writeTempFile(name: string, content: string): Promise<string> {
@@ -298,5 +316,58 @@ describe("createAppServer", () => {
     const response = await fetch(`${baseUrl}/nope`);
 
     assert.equal(response.status, 404);
+  });
+});
+
+describe("loadAccountsConfig", () => {
+  test("returns the budgets and accounts from the file", async () => {
+    const path = await writeTempFile("accounts.json", JSON.stringify(CONFIG));
+    assert.deepEqual(await loadAccountsConfig(path), CONFIG);
+  });
+
+  test("throws when the file does not exist", async () => {
+    await assert.rejects(loadAccountsConfig("/nope/accounts.json"), {
+      message: "Cannot read file '/nope/accounts.json'",
+    });
+  });
+
+  test("throws when 'budgets' is missing or empty", async () => {
+    const path = await writeTempFile("accounts.json", '{"budgets": []}');
+    await assert.rejects(loadAccountsConfig(path), { message: "'budgets' must be a non-empty array" });
+  });
+
+  test("throws when a budget has no id", async () => {
+    const path = await writeTempFile("accounts.json", '{"budgets": [{"label": "A", "accounts": []}]}');
+    await assert.rejects(loadAccountsConfig(path), { message: "budgets[0] needs a string 'label' and 'id'" });
+  });
+
+  test("throws when a budget has no accounts", async () => {
+    const path = await writeTempFile("accounts.json", '{"budgets": [{"label": "A", "id": "b", "accounts": []}]}');
+    await assert.rejects(loadAccountsConfig(path), { message: "budgets[0].accounts must be a non-empty array" });
+  });
+
+  test("throws when an account has no label", async () => {
+    const config = { budgets: [{ label: "A", id: "b", accounts: [{ id: "a" }] }] };
+    const path = await writeTempFile("accounts.json", JSON.stringify(config));
+    await assert.rejects(loadAccountsConfig(path), {
+      message: "budgets[0].accounts[0] needs a string 'label' and 'id'",
+    });
+  });
+});
+
+describe("checkSelection", () => {
+  test("accepts an account that belongs to the selected budget", () => {
+    assert.equal(checkSelection(CONFIG, BUDGET, ACCOUNT), null);
+  });
+
+  test("rejects a budget that is not in the config", () => {
+    assert.equal(checkSelection(CONFIG, "unknown", ACCOUNT), "Choose a budget from the list");
+  });
+
+  test("rejects an account from a different budget", () => {
+    assert.equal(
+      checkSelection(CONFIG, BUDGET, OTHER_ACCOUNT),
+      "The selected account does not belong to the selected budget",
+    );
   });
 });
