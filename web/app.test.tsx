@@ -393,7 +393,9 @@ describe("createAppServer", () => {
     assert.equal(response.status, 200);
     assert.match(html, /Created 1 transaction</);
     assert.doesNotMatch(html, /<dialog/);
-    assert.match(html, new RegExp(`<option value="${ACCOUNT}" selected="">`));
+    const accounts = between(html, '<select id="account"', "</select>");
+    assert.doesNotMatch(accounts, /selected=""/, "the form is cleared after a successful send");
+    assert.ok(openingTag(html, /<input id="filePath"/).includes('value=""'));
     assert.equal(api.calls.at(-1)?.url, `http://api.test/transactions/${ACCOUNT}?budget=${BUDGET}`);
   });
 
@@ -418,8 +420,11 @@ describe("createAppServer", () => {
       const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath, confirm: "yes" });
       const response = await fetch(url, { method: "POST", body: form });
 
+      const html = await response.text();
+
       assert.equal(response.status, 404);
-      assert.match(await response.text(), /Resource not found/);
+      assert.match(html, /Resource not found/);
+      assert.ok(openingTag(html, /<input id="filePath"/).includes(`value="${filePath}"`), "values stay for a retry");
     } finally {
       await close(failingServer);
     }

@@ -619,8 +619,11 @@ async function handleSubmit(
   }
 
   const result = await submitTransactions(values, apiBase, fetchImpl);
-  const status = result.ok ? 200 : (result.status ?? 400);
-  sendHtml(response, status, renderPage({ config, values, result }));
+  if (result.ok) {
+    sendHtml(response, 200, renderPage({ config, values: EMPTY_VALUES, result }));
+    return;
+  }
+  sendHtml(response, result.status ?? 400, renderPage({ config, values, result }));
 }
 
 export function createAppServer(apiBase: string, configPath: string, fetchImpl: typeof fetch = fetch): Server {
