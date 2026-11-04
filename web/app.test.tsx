@@ -640,3 +640,19 @@ describe("confirm dialog", () => {
     assert.match(html, /showModal\(\)/);
   });
 });
+
+describe("favicon", () => {
+  const html = renderPage({ config: CONFIG, values: { account: "", budget: "", filePath: "" } });
+
+  test("links an inline SVG icon in the head", () => {
+    const link = openingTag(between(html, "<head>", "</head>"), /<link[^>]*rel="icon"/);
+    assert.ok(link.includes('type="image/svg+xml"'));
+    const href = /href="data:image\/svg\+xml,([^"]+)"/.exec(link)?.[1] ?? "";
+    assert.match(decodeURIComponent(href), /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg" viewBox="0 0 32 32">/);
+  });
+
+  test("is linked on the config error page too", () => {
+    const errorPage = renderPage({ configError: "broken", values: { account: "", budget: "", filePath: "" } });
+    assert.match(errorPage, /<link[^>]*rel="icon"/);
+  });
+});

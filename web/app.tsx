@@ -487,6 +487,10 @@ function ResultPanel({ result }: { result: SubmitResult }) {
   );
 }
 
+// Arrow into a tray ("import"), in the page's accent and paper colors.
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2f5d50"/><path d="M16 6v12m-5.5-5.5L16 18l5.5-5.5M8 20v5h16v-5" fill="none" stroke="#f6f1e7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const FAVICON_HREF = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`;
+
 // Applies the saved theme before first paint. A constant, never user input.
 const THEME_LOADER = `try {
   const theme = localStorage.getItem("theme");
@@ -527,6 +531,7 @@ function Page(props: PageProps) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>YNAB Import</title>
+        <link rel="icon" type="image/svg+xml" href={FAVICON_HREF} />
         {/* STYLES is a module constant, never user input. */}
         <style dangerouslySetInnerHTML={{ __html: STYLES }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_LOADER }} />
