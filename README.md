@@ -25,15 +25,37 @@ python api.py
 
 ### Web UI (one command)
 
-A small React page (server-rendered, no build step) for `POST /transactions`. You give it
-an account, an optional budget ID and the path to a JSON file — the same file you would pass
-to `curl --data-binary @file`.
+A small React page (server-rendered, no build step) for `POST /transactions`. You pick a
+budget and an account from dropdowns and give the path to a JSON file — the same file you
+would pass to `curl --data-binary @file`.
 
 One-time setup (Node 22+):
 
 ```bash
 npm install
+cp web/accounts.example.json web/accounts.json
+# Fill in your budget and account IDs and labels
 ```
+
+`web/accounts.json` (gitignored) lists your budgets, and each budget lists its accounts:
+
+```json
+{
+  "budgets": [
+    {
+      "label": "Budget One",
+      "id": "<budget-one-uuid>",
+      "accounts": [
+        { "label": "Account One", "id": "<account-one-uuid>" }
+      ]
+    }
+  ]
+}
+```
+
+The account dropdown only shows the accounts of the selected budget, and the server rejects
+an account that is not in the selected budget. To add a budget or an account, edit the file
+and reload the page — no code change or restart needed.
 
 Start the API **and** the web UI together:
 
