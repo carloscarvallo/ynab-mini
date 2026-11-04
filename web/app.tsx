@@ -240,6 +240,14 @@ details .table-wrap { padding-bottom: 0.5rem; }
 .uuid { color: var(--muted); font-size: 0.85em; white-space: nowrap; }
 tfoot th { border-top: 1px solid var(--ink); border-bottom: 0; color: var(--ink); }
 dialog form { display: block; padding: 0; border: 0; }
+button[aria-busy="true"] { display: inline-flex; align-items: center; gap: 0.6rem; cursor: progress; }
+button[aria-busy="true"]::before { content: ""; width: 1em; height: 1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 700ms linear infinite; }
+button:disabled { cursor: progress; opacity: 0.85; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  button[aria-busy="true"]::before { animation-duration: 2.5s; }
+}
+.sending-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .dialog-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
 .result { margin-top: 2rem; }
 .result h2 { font: 600 1.4rem var(--font-display); margin: 0 0 0.75rem; }
@@ -332,10 +340,23 @@ function unitsToMilliunits(amount: unknown): number {
   return Math.round(Number(amount ?? 0) * MILLIUNITS_PER_UNIT);
 }
 
-// Opens the server-rendered dialog as a modal. A constant, never user input.
+// Opens the server-rendered dialog as a modal and shows a spinner while the
+// confirmed POST waits for the API. A constant, never user input.
 const DIALOG_OPENER = `const dialog = document.querySelector("dialog[open]");
 dialog.close();
-dialog.showModal();`;
+dialog.showModal();
+let isSending = false;
+dialog.querySelector("form").addEventListener("submit", (event) => {
+  if (event.submitter?.getAttribute("formmethod") === "dialog") return;
+  isSending = true;
+  event.submitter.setAttribute("aria-busy", "true");
+  event.submitter.textContent = "Sending…";
+  dialog.querySelector(".sending-status").textContent = "Sending transactions…";
+  setTimeout(() => dialog.querySelectorAll("button").forEach((button) => { button.disabled = true; }));
+});
+dialog.addEventListener("cancel", (event) => {
+  if (isSending) event.preventDefault();
+});`;
 
 type ConfirmDialogProps = {
   budget: BudgetOption;
@@ -402,6 +423,7 @@ function ConfirmDialog({ budget, account, filePath, transactions }: ConfirmDialo
             <button type="submit" formMethod="dialog" className="secondary" autoFocus>
               Cancel
             </button>
+            <span className="sending-status" role="status" aria-live="polite"></span>
           </div>
         </form>
       </dialog>

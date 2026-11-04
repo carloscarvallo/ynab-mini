@@ -612,6 +612,25 @@ describe("confirm dialog", () => {
     assert.match(dialog, /class="secondary"[^>]*>Cancel<\/button>/);
   });
 
+  test("has an empty live region that announces sending", () => {
+    assert.match(dialog, /<span class="sending-status" role="status" aria-live="polite"><\/span>/);
+  });
+
+  test("marks the send button busy and blocks closing while the API call runs", () => {
+    const scripts = html.match(/<script>[\s\S]*?<\/script>/g) ?? [];
+    const opener = scripts.find((text) => text.includes("showModal")) ?? "";
+    assert.match(opener, /addEventListener\("submit"/);
+    assert.match(opener, /aria-busy/);
+    assert.match(opener, /addEventListener\("cancel"/);
+  });
+
+  test("styles a spinner for the busy button that respects reduced motion", () => {
+    const styles = between(html, "<style>", "</style>");
+    assert.match(styles, /button\[aria-busy="true"\]::before \{/);
+    assert.match(styles, /@keyframes spin \{/);
+    assert.match(styles, /@media \(prefers-reduced-motion: reduce\) \{/);
+  });
+
   test("opens as a modal when scripts run", () => {
     assert.match(html, /showModal\(\)/);
   });
