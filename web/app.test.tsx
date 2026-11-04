@@ -14,6 +14,7 @@ import {
   expandHome,
   formatAmount,
   loadAccountsConfig,
+  previewTransactions,
   readTransactionsFile,
   renderPage,
   submitTransactions,
@@ -357,7 +358,8 @@ describe("createAppServer", () => {
     }
   });
 
-  test("POST / sends the file to the API and renders the created transactions", async () => {
+  test("POST / without confirmation shows the confirm dialog and does not call the API", async () => {
+    const callsBefore = api.calls.length;
     const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
     const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath });
 
@@ -365,14 +367,39 @@ describe("createAppServer", () => {
     const html = await response.text();
 
     assert.equal(response.status, 200);
+    assert.match(html, /<dialog[^>]*open=""/);
+    assert.match(between(html, "<dialog", "</dialog>"), /Itau Checking/);
+    assert.equal(api.calls.length, callsBefore);
+  });
+
+  test("POST / without confirmation returns the file error and no dialog", async () => {
+    const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath: "/nope.json" });
+
+    const response = await fetch(`${baseUrl}/`, { method: "POST", body: form });
+    const html = await response.text();
+
+    assert.equal(response.status, 400);
+    assert.match(html, /Cannot read file &#x27;\/nope.json&#x27;/);
+    assert.doesNotMatch(html, /<dialog/);
+  });
+
+  test("POST / with confirmation sends the file to the API and renders the created transactions", async () => {
+    const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
+    const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath, confirm: "yes" });
+
+    const response = await fetch(`${baseUrl}/`, { method: "POST", body: form });
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
     assert.match(html, /Created 1 transaction</);
+    assert.doesNotMatch(html, /<dialog/);
     assert.match(html, new RegExp(`<option value="${ACCOUNT}" selected="">`));
     assert.equal(api.calls.at(-1)?.url, `http://api.test/transactions/${ACCOUNT}?budget=${BUDGET}`);
   });
 
   test("POST / rejects an account from another budget without calling the API", async () => {
     const callsBefore = api.calls.length;
-    const form = new URLSearchParams({ budget: BUDGET, account: OTHER_ACCOUNT, filePath: "/tmp/t.json" });
+    const form = new URLSearchParams({ budget: BUDGET, account: OTHER_ACCOUNT, filePath: "/tmp/t.json", confirm: "yes" });
 
     const response = await fetch(`${baseUrl}/`, { method: "POST", body: form });
 
@@ -388,7 +415,7 @@ describe("createAppServer", () => {
     const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
 
     try {
-      const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath });
+      const form = new URLSearchParams({ budget: BUDGET, account: ACCOUNT, filePath, confirm: "yes" });
       const response = await fetch(url, { method: "POST", body: form });
 
       assert.equal(response.status, 404);
@@ -504,5 +531,81 @@ describe("night mode", () => {
   test("shows the toggle on the config error page too", () => {
     const errorPage = renderPage({ configError: "broken", values: EMPTY });
     assert.match(errorPage, /class="theme-toggle"/);
+  });
+});
+
+describe("previewTransactions", () => {
+  test("returns the transactions from the file without calling anything", async () => {
+    const filePath = await writeTempFile("txns.json", JSON.stringify(TXNS));
+    assert.deepEqual(await previewTransactions({ account: ACCOUNT, budget: BUDGET, filePath }), {
+      ok: true,
+      transactions: TXNS,
+    });
+  });
+
+  test("returns the validation error for a blank file path", async () => {
+    assert.deepEqual(await previewTransactions({ account: ACCOUNT, budget: BUDGET, filePath: " " }), {
+      ok: false,
+      error: "File path is required",
+    });
+  });
+
+  test("returns the file error", async () => {
+    assert.deepEqual(await previewTransactions({ account: ACCOUNT, budget: BUDGET, filePath: "/nope.json" }), {
+      ok: false,
+      error: "Cannot read file '/nope.json'",
+    });
+  });
+});
+
+describe("confirm dialog", () => {
+  const values = { budget: BUDGET, account: ACCOUNT, filePath: "/tmp/itau.json" };
+  const transactions = [
+    { amount: 7200000, date: "2026-10-16", payee_name: "SPI", memo: "Ref 1" },
+    { amount: -1330000, date: "2026-10-20", payee_name: "Internet Banking", memo: "Ref 2" },
+  ];
+  const html = renderPage({ config: CONFIG, values, confirmation: { transactions } });
+  const dialog = between(html, "<dialog", "</dialog>");
+
+  test("is not rendered without a confirmation", () => {
+    assert.doesNotMatch(renderPage({ config: CONFIG, values }), /<dialog/);
+  });
+
+  test("opens labelled by its heading", () => {
+    const tag = openingTag(html, /<dialog\b/);
+    assert.ok(tag.includes('open=""') && tag.includes('aria-labelledby="confirm-title"'));
+    assert.match(dialog, /<h2 id="confirm-title">Confirm transactions<\/h2>/);
+  });
+
+  test("shows the budget and account labels and the file path", () => {
+    assert.match(dialog, /<dt>Budget<\/dt><dd>Personal<\/dd>/);
+    assert.match(dialog, /<dt>Account<\/dt><dd>Itau Checking<\/dd>/);
+    assert.match(dialog, /<dt>File<\/dt><dd>\/tmp\/itau.json<\/dd>/);
+  });
+
+  test("previews each transaction in currency units with the total", () => {
+    assert.match(dialog, /<td>2026-10-16<\/td><td>SPI<\/td><td>Ref 1<\/td><td class="amount inflow">7,200,000.00<\/td>/);
+    assert.match(dialog, /<td class="amount outflow">-1,330,000.00<\/td>/);
+    assert.match(dialog, /Total<\/th><th class="amount">5,870,000.00<\/th>/);
+  });
+
+  test("posts the same values with confirm=yes", () => {
+    const form = between(dialog, "<form", "</form>");
+    assert.match(form, new RegExp(`type="hidden" name="budget" value="${BUDGET}"`));
+    assert.match(form, new RegExp(`type="hidden" name="account" value="${ACCOUNT}"`));
+    assert.match(form, /type="hidden" name="filePath" value="\/tmp\/itau.json"/);
+    assert.match(form, /type="hidden" name="confirm" value="yes"/);
+    assert.match(form, /<button type="submit">Send 2 transactions<\/button>/);
+  });
+
+  test("has a cancel button that closes the dialog without submitting", () => {
+    const cancel = openingTag(dialog, /<button[^>]*class="secondary"/);
+    assert.ok(cancel.includes('type="submit"') && cancel.includes('formMethod="dialog"'));
+    assert.ok(cancel.includes('autofocus=""'), "Cancel gets focus so Enter does not send by accident");
+    assert.match(dialog, /class="secondary"[^>]*>Cancel<\/button>/);
+  });
+
+  test("opens as a modal when scripts run", () => {
+    assert.match(html, /showModal\(\)/);
   });
 });

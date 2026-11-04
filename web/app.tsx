@@ -79,12 +79,19 @@ export async function loadAccountsConfig(path: string): Promise<AccountsConfig> 
   return parseAccountsConfig(await readJsonFile(path));
 }
 
-export function checkSelection(config: AccountsConfig, budgetId: string, accountId: string): string | null {
+function findSelection(
+  config: AccountsConfig,
+  budgetId: string,
+  accountId: string,
+): { budget?: BudgetOption; account?: AccountOption } {
   const budget = config.budgets.find(({ id }) => id === budgetId);
+  return { budget, account: budget?.accounts.find(({ id }) => id === accountId) };
+}
+
+export function checkSelection(config: AccountsConfig, budgetId: string, accountId: string): string | null {
+  const { budget, account } = findSelection(config, budgetId, accountId);
   if (!budget) return "Choose a budget from the list";
-  if (!budget.accounts.some(({ id }) => id === accountId)) {
-    return "The selected account does not belong to the selected budget";
-  }
+  if (!account) return "The selected account does not belong to the selected budget";
   return null;
 }
 
@@ -104,20 +111,27 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
 }
 
+export type PreviewResult = { ok: true; transactions: Transaction[] } | { ok: false; error: string };
+
+export async function previewTransactions(values: FormValues): Promise<PreviewResult> {
+  const invalid = validateValues(values);
+  if (invalid) return { ok: false, error: invalid };
+
+  try {
+    return { ok: true, transactions: await readTransactionsFile(values.filePath.trim()) };
+  } catch (error: unknown) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
 export async function submitTransactions(
   values: FormValues,
   apiBase: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<SubmitResult> {
-  const invalid = validateValues(values);
-  if (invalid) return { ok: false, error: invalid };
-
-  let transactions: Transaction[];
-  try {
-    transactions = await readTransactionsFile(values.filePath.trim());
-  } catch (error: unknown) {
-    return { ok: false, error: errorMessage(error) };
-  }
+  const preview = await previewTransactions(values);
+  if (!preview.ok) return preview;
+  const { transactions } = preview;
 
   let response: Response;
   try {
@@ -157,6 +171,7 @@ const STYLES = `
   --outflow: #a3392b;
   --field: #fffdf8;
   --error-bg: #fbebe7;
+  --backdrop: rgb(29 27 22 / 0.45);
   color-scheme: light;
   --font-display: ui-serif, "Iowan Old Style", Georgia, serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -173,6 +188,7 @@ const STYLES = `
     --outflow: #ef8a7a;
     --field: #201d16;
     --error-bg: #2e1b17;
+    --backdrop: rgb(0 0 0 / 0.6);
     color-scheme: dark;
   }
 }
@@ -186,6 +202,7 @@ const STYLES = `
   --outflow: #ef8a7a;
   --field: #201d16;
   --error-bg: #2e1b17;
+  --backdrop: rgb(0 0 0 / 0.6);
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -206,6 +223,17 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .theme-toggle:hover { color: var(--paper); background: var(--ink); }
 .theme-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .theme-toggle[aria-pressed="true"]:hover { color: var(--paper); background: var(--accent); }
+button.secondary { color: var(--ink); background: transparent; border: 1px solid var(--rule); }
+button.secondary:hover { color: var(--paper); background: var(--ink); }
+dialog { width: min(40rem, calc(100% - 2rem)); max-height: calc(100% - 2rem); padding: 1.5rem; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-top: 4px solid var(--ink); border-radius: var(--radius); }
+dialog::backdrop { background: var(--backdrop); }
+dialog h2 { font: 600 1.6rem var(--font-display); margin: 0 0 1rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; margin: 0 0 1.25rem; }
+dt { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding-top: 0.2rem; }
+dd { margin: 0; font-family: var(--font-mono); word-break: break-all; }
+tfoot th { border-top: 1px solid var(--ink); border-bottom: 0; color: var(--ink); }
+dialog form { display: block; padding: 0; border: 0; }
+.dialog-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
 .result { margin-top: 2rem; }
 .result h2 { font: 600 1.4rem var(--font-display); margin: 0 0 0.75rem; }
 .error { padding: 1rem 1.1rem; border-left: 4px solid var(--outflow); background: var(--error-bg); white-space: pre-wrap; word-break: break-word; }
@@ -293,6 +321,83 @@ function TransactionRow({ transaction }: { transaction: Transaction }) {
   );
 }
 
+function unitsToMilliunits(amount: unknown): number {
+  return Math.round(Number(amount ?? 0) * MILLIUNITS_PER_UNIT);
+}
+
+// Opens the server-rendered dialog as a modal. A constant, never user input.
+const DIALOG_OPENER = `const dialog = document.querySelector("dialog[open]");
+dialog.close();
+dialog.showModal();`;
+
+type ConfirmDialogProps = {
+  budget: BudgetOption;
+  account: AccountOption;
+  filePath: string;
+  transactions: Transaction[];
+};
+
+function ConfirmDialog({ budget, account, filePath, transactions }: ConfirmDialogProps) {
+  const noun = transactions.length === 1 ? "transaction" : "transactions";
+  const total = transactions.reduce((sum, { amount }) => sum + unitsToMilliunits(amount), 0);
+  return (
+    <>
+      <dialog open aria-labelledby="confirm-title">
+        <h2 id="confirm-title">Confirm transactions</h2>
+        <dl>
+          <dt>Budget</dt>
+          <dd>{budget.label}</dd>
+          <dt>Account</dt>
+          <dd>{account.label}</dd>
+          <dt>File</dt>
+          <dd>{filePath}</dd>
+        </dl>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Payee</th>
+                <th>Memo</th>
+                <th className="amount">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((transaction, index) => (
+                <TransactionRow
+                  key={index}
+                  transaction={{ ...transaction, amount: unitsToMilliunits(transaction.amount) }}
+                />
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <th colSpan={3}>Total</th>
+                <th className="amount">{formatAmount(total)}</th>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <form method="post" action="/">
+          <input type="hidden" name="budget" value={budget.id} />
+          <input type="hidden" name="account" value={account.id} />
+          <input type="hidden" name="filePath" value={filePath} />
+          <input type="hidden" name="confirm" value="yes" />
+          <div className="dialog-actions">
+            <button type="submit">
+              Send {transactions.length} {noun}
+            </button>
+            <button type="submit" formMethod="dialog" className="secondary" autoFocus>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </dialog>
+      <script dangerouslySetInnerHTML={{ __html: DIALOG_OPENER }} />
+    </>
+  );
+}
+
 function SuccessPanel({ transactions }: { transactions: Transaction[] }) {
   const noun = transactions.length === 1 ? "transaction" : "transactions";
   return (
@@ -365,10 +470,20 @@ toggle.addEventListener("click", () => {
   try { localStorage.setItem("theme", theme); } catch {}
 });`;
 
+export type Confirmation = { transactions: Transaction[] };
+
 export type PageProps = { values: FormValues; result?: SubmitResult } & (
-  | { config: AccountsConfig }
+  | { config: AccountsConfig; confirmation?: Confirmation }
   | { configError: string }
 );
+
+function ConfirmationFor({ config, values, confirmation }: { config: AccountsConfig; values: FormValues; confirmation: Confirmation }) {
+  const { budget, account } = findSelection(config, values.budget, values.account);
+  if (!budget || !account) return null;
+  return (
+    <ConfirmDialog budget={budget} account={account} filePath={values.filePath} transactions={confirmation.transactions} />
+  );
+}
 
 function Page(props: PageProps) {
   const { values, result } = props;
@@ -397,6 +512,9 @@ function Page(props: PageProps) {
             <ConfigErrorPanel error={props.configError} />
           )}
           {result && <ResultPanel result={result} />}
+          {"config" in props && props.confirmation && (
+            <ConfirmationFor config={props.config} values={values} confirmation={props.confirmation} />
+          )}
         </main>
         <script dangerouslySetInnerHTML={{ __html: THEME_TOGGLE }} />
       </body>
@@ -422,8 +540,7 @@ async function readBody(request: IncomingMessage): Promise<string | null> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function formValuesFrom(body: string): FormValues {
-  const params = new URLSearchParams(body);
+function formValuesFrom(params: URLSearchParams): FormValues {
   return {
     account: params.get("account") ?? "",
     budget: params.get("budget") ?? "",
@@ -450,11 +567,24 @@ async function handleSubmit(
     return;
   }
 
-  const values = formValuesFrom(body);
+  const params = new URLSearchParams(body);
+  const values = formValuesFrom(params);
   const mismatch = checkSelection(config, values.budget, values.account);
-  const result = mismatch
-    ? { ok: false as const, error: mismatch }
-    : await submitTransactions(values, apiBase, fetchImpl);
+  if (mismatch) {
+    sendHtml(response, 400, renderPage({ config, values, result: { ok: false, error: mismatch } }));
+    return;
+  }
+
+  if (params.get("confirm") !== "yes") {
+    const preview = await previewTransactions(values);
+    const page = preview.ok
+      ? renderPage({ config, values, confirmation: { transactions: preview.transactions } })
+      : renderPage({ config, values, result: preview });
+    sendHtml(response, preview.ok ? 200 : 400, page);
+    return;
+  }
+
+  const result = await submitTransactions(values, apiBase, fetchImpl);
   const status = result.ok ? 200 : (result.status ?? 400);
   sendHtml(response, status, renderPage({ config, values, result }));
 }
