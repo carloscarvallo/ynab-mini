@@ -155,26 +155,60 @@ const STYLES = `
   --accent: #2f5d50;
   --inflow: #2f6b3a;
   --outflow: #a3392b;
+  --field: #fffdf8;
+  --error-bg: #fbebe7;
+  color-scheme: light;
   --font-display: ui-serif, "Iowan Old Style", Georgia, serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --radius: 4px;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #17150f;
+    --ink: #ece5d6;
+    --muted: #a39a88;
+    --rule: #3a352b;
+    --accent: #7fb8a4;
+    --inflow: #7cc48a;
+    --outflow: #ef8a7a;
+    --field: #201d16;
+    --error-bg: #2e1b17;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #17150f;
+  --ink: #ece5d6;
+  --muted: #a39a88;
+  --rule: #3a352b;
+  --accent: #7fb8a4;
+  --inflow: #7cc48a;
+  --outflow: #ef8a7a;
+  --field: #201d16;
+  --error-bg: #2e1b17;
+  color-scheme: dark;
+}
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
 main { max-width: 44rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 h1 { font: 600 2.6rem/1.05 var(--font-display); margin: 0 0 0.25rem; letter-spacing: -0.02em; }
 .lede { color: var(--muted); margin: 0 0 2.5rem; }
 form { display: grid; gap: 1.25rem; padding: 1.5rem 0; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--rule); }
 label { display: block; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.35rem; }
-input, select { width: 100%; padding: 0.6rem 0.7rem; font: 0.95rem var(--font-mono); color: var(--ink); background: #fffdf8; border: 1px solid var(--rule); border-radius: var(--radius); }
+input, select { width: 100%; padding: 0.6rem 0.7rem; font: 0.95rem var(--font-mono); color: var(--ink); background: var(--field); border: 1px solid var(--rule); border-radius: var(--radius); }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 button { justify-self: start; padding: 0.7rem 1.4rem; font: 600 0.95rem system-ui, sans-serif; color: var(--paper); background: var(--ink); border: 0; border-radius: var(--radius); cursor: pointer; transition: transform 150ms ease-out, background 150ms ease-out; }
 button:hover { background: var(--accent); }
 button:active { transform: translateY(1px); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-toggle { flex: none; padding: 0.4rem 0.8rem; font-size: 0.8rem; color: var(--ink); background: transparent; border: 1px solid var(--rule); }
+.theme-toggle:hover { color: var(--paper); background: var(--ink); }
+.theme-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.theme-toggle[aria-pressed="true"]:hover { color: var(--paper); background: var(--accent); }
 .result { margin-top: 2rem; }
 .result h2 { font: 600 1.4rem var(--font-display); margin: 0 0 0.75rem; }
-.error { padding: 1rem 1.1rem; border-left: 4px solid var(--outflow); background: #fbebe7; white-space: pre-wrap; word-break: break-word; }
+.error { padding: 1rem 1.1rem; border-left: 4px solid var(--outflow); background: var(--error-bg); white-space: pre-wrap; word-break: break-word; }
 .error strong { display: block; font-family: var(--font-mono); color: var(--outflow); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
@@ -314,6 +348,23 @@ function ResultPanel({ result }: { result: SubmitResult }) {
   );
 }
 
+// Applies the saved theme before first paint. A constant, never user input.
+const THEME_LOADER = `try {
+  const theme = localStorage.getItem("theme");
+  if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+} catch {}`;
+
+// Flips between light and dark and remembers the choice. A constant, never user input.
+const THEME_TOGGLE = `const toggle = document.querySelector(".theme-toggle");
+const isDark = () => (document.documentElement.dataset.theme ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
+toggle.setAttribute("aria-pressed", String(isDark()));
+toggle.addEventListener("click", () => {
+  const theme = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = theme;
+  toggle.setAttribute("aria-pressed", String(theme === "dark"));
+  try { localStorage.setItem("theme", theme); } catch {}
+});`;
+
 export type PageProps = { values: FormValues; result?: SubmitResult } & (
   | { config: AccountsConfig }
   | { configError: string }
@@ -329,10 +380,16 @@ function Page(props: PageProps) {
         <title>YNAB Import</title>
         {/* STYLES is a module constant, never user input. */}
         <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+        <script dangerouslySetInnerHTML={{ __html: THEME_LOADER }} />
       </head>
       <body>
         <main>
-          <h1>YNAB Import</h1>
+          <header>
+            <h1>YNAB Import</h1>
+            <button type="button" className="theme-toggle" aria-pressed="false">
+              Night mode
+            </button>
+          </header>
           <p className="lede">Send a JSON file of transactions to an account.</p>
           {"config" in props ? (
             <TransactionForm config={props.config} values={values} />
@@ -341,6 +398,7 @@ function Page(props: PageProps) {
           )}
           {result && <ResultPanel result={result} />}
         </main>
+        <script dangerouslySetInnerHTML={{ __html: THEME_TOGGLE }} />
       </body>
     </html>
   );

@@ -473,3 +473,36 @@ describe("checkSelection", () => {
     );
   });
 });
+
+describe("night mode", () => {
+  const EMPTY = { account: "", budget: "", filePath: "" };
+  const html = renderPage({ config: CONFIG, values: EMPTY });
+  const styles = between(html, "<style>", "</style>");
+
+  test("redefines the color tokens for the system dark preference and for an explicit choice", () => {
+    assert.match(styles, /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{/);
+    assert.match(styles, /:root\[data-theme="dark"\] \{/);
+    assert.match(styles, /color-scheme: dark/);
+  });
+
+  test("keeps every color in a token", () => {
+    const stray = styles.split("\n").filter((line) => /#[0-9a-f]{3,6}\b/i.test(line) && !line.trim().startsWith("--"));
+    assert.deepEqual(stray, []);
+  });
+
+  test("applies the saved theme in the head, before the body renders", () => {
+    const head = between(html, "<head>", "</head>");
+    assert.match(head, /<script>[^<]*localStorage\.getItem\("theme"\)/);
+  });
+
+  test("renders a night mode toggle button", () => {
+    const toggle = openingTag(html, /<button[^>]*class="theme-toggle"/);
+    assert.ok(toggle.includes('type="button"') && toggle.includes('aria-pressed="false"'));
+    assert.match(html, /class="theme-toggle"[^>]*>Night mode<\/button>/);
+  });
+
+  test("shows the toggle on the config error page too", () => {
+    const errorPage = renderPage({ configError: "broken", values: EMPTY });
+    assert.match(errorPage, /class="theme-toggle"/);
+  });
+});
